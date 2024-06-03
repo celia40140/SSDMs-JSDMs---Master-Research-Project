@@ -1,0 +1,457 @@
+---
+title: "spatial Hmsc-HCP multivariate"
+output: html_document
+date: "2024-04-18"
+---
+
+This notebook demonstrates the concept of using Hmsc-HPC extension for `Hmsc` package. Unlike the core `Hmsc`, the Hmsc-HPC extension is written in Python programming language and is executed with Python interpreter. Hence, before a user can use it, a proper Python installation is required.
+
+# Preparing Python environment
+
+**If you are familiar with using Python within R**, then please configure Python in your preferred way and pip-install the Python package from the distributed zip package (`pip install .../path/to/hmsc-hpc`), and skip to the section [Checking Python environment].
+
+**If you are not familiar with using Python within R**, then please follow the detailed instructions below.
+
+## Detailed instructions
+
+### 1. Finding Python installation
+
+Depending on your hardware, operating system and user rights, the set of steps to acquire and configure a proper Python distribution may greatly vary. Thus, we would like to relay the installation process itself either to one of multitude guides available on the web, or to the IT support that manages your device. This section merely checks that a Python installation can be found.
+
+Please test the next chunk of code that tries to check version of Python available in you system:
+
+```{r}
+system_python = "python3"
+# system_python = "/Users/username/opt/anaconda3/envs/tf/bin/python3"
+system2(system_python, "--version")
+```
+
+If the Python distribution in your system is configured well, then the code shall print the version of Python. If this is failing, then you are likely missing Python altogether, or its path is not configured correctly. In some cases you may have several distributions of Python available, and then you shall either explicitly specify the path to the desired Python distribution --- as exemplified in the commented-out `system_python = ...` line above.
+
+### 2. Creating a new virtual environment
+
+Please note that this notebook is configured **NOT** to execute the codes that install any software or packages --- both in this and next sections during whole notebook execution. Please execute them manually one by one if needed.
+
+
+The next line creates an empty virtual environment where we will set up Hmsc-HPC:
+
+```{r}
+system2(system_python, "-m venv hmsc-venv")
+```
+
+Then, we activate this Python environment by defining an appropriate `python` path variable and check that it works by printing the version of Python:
+
+```{r}
+python = file.path(getwd(), "hmsc-venv", "bin", "python")  # for Linux and macOS
+# python = file.path(getwd(), "hmsc-venv", "Scripts", "python")  # for Windows
+system2(python, "--version")
+```
+
+If this is failing, then you need to adjust the path to the correct Python executable (note that the path depends on operating system -- see comments in the code block above).
+
+### 3. Install Hmsc-HPC package
+
+For installing the Hmsc-HPC Python package, we need to define the path to the Hmsc-HPC package. Assuming that you have downloaded this notebook as a part of the distributed zip package, the pre-set `package_path` shall work fine. Otherwise, please set the correct `package_path`. (Note for reviewers: after the blind review, the Hmsc-HPC package will be published and can be directly installed from web repository.):
+
+```{r, echo = FALSE}
+package_path = file.path(getwd(), "..", "..")
+system2(python, "-m pip install --upgrade pip")
+system2(python, paste("-m pip install", shQuote(package_path)))
+```
+
+After this, you should have a functioning Python environment.
+
+## Checking Python environment
+
+This section is for checking whether the examples in this notebook shall be expected to execute well or not.
+
+The next code chunk tests that the Python environment works by executing a basic TensorFlow-based command and importing Hmsc-HPC package. Please define the correct `python` path to the Python executable. If you have configured Python outside R, then the default should work fine.
+
+```{r}
+# Choose correct python by uncommenting correct line:
+# python = "python3"  # default
+# python = file.path(getwd(), "hmsc-venv", "bin", "python")  # hmsc-venv for Linux and macOS
+# python = file.path(getwd(), "hmsc-venv", "Scripts", "python")  # hmsc-venv for Windows
+
+Sys.setenv(TF_CPP_MIN_LOG_LEVEL=3)  # reduce debug output from tensorflow
+system2(python, "-c \"import tensorflow as tf; print(tf.constant(1))\"")
+system2(python, "-c \"import hmsc\"")
+```
+
+Your Python setup is working correctly if the code does not produce any errors.
+
+### Troubleshooting
+
+If the above check and the detailed instructions do not work for you, please consult one of multitude guides available on the web. You can configure Python within R in multiple ways - for instance, `reticulate` package features several functions aimed to achieve that or you can prepare and activate the correct Python environment outside R.
+
+# Setting up a toy Hmsc model
+
+First, we shall acquire a sufficiently recent `Hmsc` package. Most likely, the actual distribution on CRAN is already suitable, but most certainly it can be done from the master branch of `Hmsc` repo on GitHub.
+
+```{r eval=FALSE, include=FALSE}
+library(devtools)
+# install_github("hmsc-r/HMSC")
+library(Hmsc)
+
+#if any bug follow instructions here: https://stackoverflow.com/questions/70908295/failed-to-install-unknown-package-from-github
+```
+
+Next, we load the required packages. We also set up the path to the working directory and the path to the Hmsc-HPC package. Assuming that you have downloaded this notebook as a part of the distributed Hmsc-HPC extension, the pre-set relative paths shall work fine. Otherwise, please note that these are user and system-specific, therefore you shall ensure their correctness yourself.
+
+```{r, echo = FALSE}
+# library(Hmsc)
+library(jsonify)
+```
+
+Next, we introduce the fundamental model fitting parameters determining the MCMC sampling: number of samples to obtain per MCMC chain, thinning and number of chains. We also define the regularity of progress printing during MCMC sampling. We set the transient phase being equally long as the sampling phase.
+
+```{r}
+nSamples = 1000
+thin = 400
+nChains = 4
+verbose = 50000
+transient = 50000
+```
+
+
+```{r, echo = FALSE}
+load("~/Bureau/LAST VERSION FROM PERSONNAL LAPTOP/Final Project/celia_project/data/derived_data/cov_med.RData")
+load("~/Bureau/LAST VERSION FROM PERSONNAL LAPTOP/Final Project/celia_project/data/derived_data/occ_med.RData")
+
+occurrence <- occ_med$fitting 
+covariates = cov_med 
+
+#select from cov_med all data from both fitting and validation to set up random factors
+occ_combined <- rbind(occ_med$fitting, occ_med$validation)
+combined_id <- occ_combined$id_spygen
+
+cov_combined <- subset(covariates, id_spygen %in% combined_id)
+
+
+save_init <- "~/Bureau/hmsc-hpc/examples/basic_example/outputs/hmsc_models/shmsc_models/init_multi"
+localDir <- "~/Bureau/hmsc-hpc/examples/basic_example/outputs/hmsc_models/shmsc_models/multivariate"
+  
+# create raw occurrence object and select cross validation set i
+  fitting <- occurrence
+    
+  # add covariates
+  occurrence_final <- dplyr::inner_join(fitting, covariates, by = "id_spygen")
+  occurrence_final$protection <- as.factor(occurrence_final$protection)
+  occurrence_final$principal_substrat <- as.factor(occurrence_final$principal_substrat)
+    
+    # Fit model:
+    # Create X matrix
+    X <- occurrence_final |>
+      dplyr::select(colnames(covariates)[!colnames(covariates) %in% c("id_spygen", "mid_latitude", "mid_longitude", "dist_shore", "turbidity")])
+    X <- as.data.frame(X)
+    rownames(X) <- occurrence_final$id_spygen
+    
+    # Create Y matrix
+    Y <- occurrence_final |>
+      dplyr::select(-c("id_spygen", "mid_latitude", "mid_longitude", "fishing_pressure","bathymetry", "temperature", "chlorophyll", "salinity", "dist_fully_protected_MPA", "protection", "nb_substrats", "principal_substrat", "gravity", "dist_shore", "turbidity")) |>
+      data.matrix()
+    rownames(Y) <- occurrence_final$id_spygen
+    
+  #  # setting model structure with spatial structure ‘Nearest Neighbour Gaussian Process (NNGP)’
+  # # (1) add noise to coordinates for them to differ sltitly
+  # noise_magnitude <- 0.00001
+  # cov_combined <- cov_combined |>
+  #   dplyr::rowwise() |>
+  #   dplyr::mutate(mid_latitude = mid_latitude + runif(1, -noise_magnitude, noise_magnitude),
+  #                 mid_longitude = mid_longitude + runif(1, -noise_magnitude, noise_magnitude)) |>
+  #   dplyr::ungroup()
+  
+  # (2) create a matrix with coordinates : xycoords is a matrix with 2 columns "x-coordinate","y-coordinate" and row names with spygen_code
+  xycoords <- cov_combined |>
+    dplyr::select(c("mid_longitude" , "mid_latitude")) |>
+    data.matrix()
+  colnames(xycoords) = c("x-coordinate","y-coordinate")
+  rownames(xycoords) <- cov_combined$id_spygen
+  
+  # (3) add spatial random effect and studydesign (rows in Y)
+  rL.nngp = Hmsc::HmscRandomLevel(sData = xycoords, sMethod = 'NNGP', nNeighbours = 10)
+  rL.nngp = Hmsc::setPriors(rL.nngp,nfMin=1,nfMax=1)
+  
+  studyDesign <- data.frame(spatial = as.factor(occurrence_final$id_spygen), associations = as.factor(occurrence_final$id_spygen))
+  
+  rL = Hmsc::HmscRandomLevel(units = studyDesign$associations)
+  
+  # setting model structure
+   model_fit = Hmsc::Hmsc(Y = Y,
+                           XData = X,
+                           XFormula = ~ fishing_pressure + bathymetry + temperature + chlorophyll + salinity + dist_fully_protected_MPA + nb_substrats + gravity + protection + principal_substrat,
+                           studyDesign = studyDesign,
+                           ranLevels = list(spatial = rL.nngp, associations = rL),
+                           distr = "probit")
+      
+     # create object for computation on HMSC-HPC
+      init_obj = Hmsc::sampleMcmc(model_fit, samples=nSamples, thin=thin,
+											transient=transient, nChains=nChains,
+											verbose=verbose, engine="HPC")
+      
+      # save it locally
+      file_name <- sprintf("init_multi.Rdata")
+      init_file_path = file.path(save_init, file_name)  
+      saveRDS(jsonify::to_json(init_obj), file=init_file_path)
+      
+    
+    
+```
+
+# Hmsc-HPC for sequential execution of chains
+
+As the Hmsc-HPC operates in Python, in the next step we programmatically formulate the required call.
+
+```{r, echo = FALSE}
+save_out <- "~/Bureau/hmsc-hpc/examples/basic_example/outputs/hmsc_models/shmsc_models/out_multi"
+save_init <- "~/Bureau/hmsc-hpc/examples/basic_example/outputs/hmsc_models/shmsc_models/init_multi"
+
+# List all files in the directory
+files <- list.files(save_init, full.names = TRUE)
+
+# list to save all arguments for python
+python_cmd_args <- list()
+
+for (file_path in files) {
+  # Extract species_name and j from the file name
+  file_name <- basename(file_path)
+  
+  # Define the output file path
+  post_file_path <- file.path(save_out, file_name)
+  
+  # Construct the Python command
+  python_cmd_args[file_path] <- paste("-m hmsc.run_gibbs_sampler",
+                           "--input", shQuote(file_path),
+                           "--output", shQuote(post_file_path),
+                           "--samples", nSamples,
+                           "--transient", transient,
+                           "--thin", thin,
+                           "--verbose", verbose)
+  
+  # Print the Python command
+  # cat(paste(shQuote(python), python_cmd_args), "\n")
+}
+
+```
+
+In this example we implicitly focus on the case of using local machine for MCMC execution, but any properly set-up machine can be used --- the user just need to move the initialized object there.
+
+### Running Python model fitting script
+
+If the user is savvy in running Python scripts from R, then the outputted calls can be executed as a part of R script execution. While this can be accomplished by executing the next chunk of code, we personally have found it to be very sensitive to a very proper Python configuration. Thus, at this stage we recommend to run a shell (command line) and simply paste the call produced by the previous chunk - at least during the user's learning of Hmsc-HPC workflow.
+
+```{r, echo = FALSE}
+for (file_path in files) {
+system2(python, python_cmd_args[file_path])
+}
+```
+
+### Importing computed posterior to R
+
+Once the Python call has conducted, the following step is to import the calculated posterior samples back to R. We start by reading the output of `Hmsc-HPC`, which is a stacked list of fitted chains and time elapsed for model fitting.
+
+```{r, echo=FALSE}
+localDir <- "~/Bureau/hmsc-hpc/examples/basic_example/outputs/hmsc_models/shmsc_models/multivariate"
+save_out <- "~/Bureau/hmsc-hpc/examples/basic_example/outputs/hmsc_models/shmsc_models/out_multi"
+# List all files in the directory
+files <- list.files(save_out, full.names = TRUE)
+
+file_name <- basename(files)
+
+load("~/Bureau/LAST VERSION FROM PERSONNAL LAPTOP/Final Project/celia_project/data/derived_data/cov_med.RData")
+load("~/Bureau/LAST VERSION FROM PERSONNAL LAPTOP/Final Project/celia_project/data/derived_data/occ_med.RData")
+occurrence <- occ_med$fitting 
+covariates = cov_med 
+
+#select from cov_med all data from both fitting and validation to set up random factors
+occ_combined <- rbind(occ_med$fitting, occ_med$validation)
+combined_id <- occ_combined$id_spygen
+cov_combined <- subset(covariates, id_spygen %in% combined_id)
+
+
+# create raw occurrence object
+fitting <- occurrence
+    
+  # add covariates
+  occurrence_final <- dplyr::inner_join(fitting, covariates, by = "id_spygen")
+    
+    # add covariates
+  occurrence_final <- dplyr::inner_join(fitting, covariates, by = "id_spygen")
+  occurrence_final$protection <- as.factor(occurrence_final$protection)
+occurrence_final$principal_substrat <- as.factor(occurrence_final$principal_substrat)
+    
+    # Fit model:
+    # Create X matrix
+    X <- occurrence_final |>
+      dplyr::select(colnames(covariates)[!colnames(covariates) %in% c("id_spygen", "mid_latitude", "mid_longitude", "dist_shore", "turbidity")])
+    X <- as.data.frame(X)
+    rownames(X) <- occurrence_final$id_spygen
+    
+    # Create Y matrix
+    Y <- occurrence_final |>
+      dplyr::select(-c("id_spygen", "mid_latitude", "mid_longitude", "fishing_pressure","bathymetry", "temperature", "chlorophyll", "salinity", "dist_fully_protected_MPA", "protection", "nb_substrats", "principal_substrat", "gravity", "dist_shore", "turbidity")) |>
+      data.matrix()
+    rownames(Y) <- occurrence_final$id_spygen
+    
+    
+    # setting model structure with spatial structure ‘Nearest Neighbour Gaussian Process (NNGP)’
+  # # (1) add noise to coordinates for them to differ sltitly
+  # noise_magnitude <- 0.00001
+  # cov_combined <- cov_combined |>
+  #   dplyr::rowwise() |>
+  #   dplyr::mutate(mid_latitude = mid_latitude + runif(1, -noise_magnitude, noise_magnitude),
+  #                 mid_longitude = mid_longitude + runif(1, -noise_magnitude, noise_magnitude)) |>
+  #   dplyr::ungroup()
+  
+  # (2) create a matrix with coordinates : xycoords is a matrix with 2 columns "x-coordinate","y-coordinate" and row names with spygen_code
+  xycoords <- cov_combined |>
+    dplyr::select(c("mid_longitude" , "mid_latitude")) |>
+    data.matrix()
+  colnames(xycoords) = c("x-coordinate","y-coordinate")
+  rownames(xycoords) <- cov_combined$id_spygen
+  
+  # (3) add spatial random effect and studydesign (rows in Y)
+  rL.nngp = Hmsc::HmscRandomLevel(sData = xycoords, sMethod = 'NNGP', nNeighbours = 10)
+  rL.nngp = Hmsc::setPriors(rL.nngp,nfMin=1,nfMax=1)
+  
+  studyDesign <- data.frame(spatial = as.factor(occurrence_final$id_spygen), associations = as.factor(occurrence_final$id_spygen))
+  
+  rL = Hmsc::HmscRandomLevel(units = studyDesign$associations)
+  
+  # setting model structure
+   model_fit = Hmsc::Hmsc(Y = Y,
+                           XData = X,
+                           XFormula = ~ fishing_pressure + bathymetry + temperature + chlorophyll + salinity + dist_fully_protected_MPA + nb_substrats + gravity + protection + principal_substrat,
+                           studyDesign = studyDesign,
+                           ranLevels = list(spatial = rL.nngp, associations = rL),
+                           distr = "probit")
+      
+post_file_path <- file.path(save_out, file_name)
+
+importFromHPC = from_json(readRDS(file = post_file_path)[[1]])
+postList = importFromHPC[1:nChains]
+cat(sprintf("fitting time %.1f sec\n", importFromHPC[[nChains+1]]))
+
+model_fit_mcmc = importPosteriorFromHPC(model_fit, postList, nSamples, thin, transient)
+
+model_name <- sprintf("shmsc_multi_finalv2.Rdata")
+save(model_fit_mcmc, file=file.path(localDir, model_name))
+
+
+
+```
+
+A fitted Hmsc-R model differs from its unfitted counterpart in two aspects. First, it contains information on the sampling being done. Next, it accommodates the list of fitted MCMC, each of which is a list of posterior samples for that chain. Both adjustments are made with a novel function of the `Hmsc` package, called `importPosteriorFromHPC(...)` that takes the unfitted model, imported list of chains produced by Hmsc-HPC and the core MCMC settings that were used for the fitting.
+
+
+
+```{r}
+# now we look at the model to see if the parameters are good 
+## MCMC convergence
+# species niches Beta; residual species associations Omega
+ns = 116 # nbr espèces
+mpost = Hmsc::convertToCodaObject(model_fit_mcmc)
+par(mfrow=c(2,2))
+ess.beta = coda::effectiveSize(mpost$Beta)
+psrf.beta = coda::gelman.diag(mpost$Beta, multivariate=FALSE)$psrf
+hist(ess.beta)
+hist(psrf.beta)
+sppairs = matrix(sample(x = 1:ns^2, size = 100))
+tmp = mpost$Omega[[1]]
+for (chain in 1:length(tmp)){
+  tmp[[chain]] = tmp[[chain]][,sppairs]
+}
+ess.omega = coda::effectiveSize(tmp)
+psrf.omega = coda::gelman.diag(tmp, multivariate=FALSE)$psrf
+hist(ess.omega)
+hist(psrf.omega)
+
+## Predictions
+preds = Hmsc::computePredictedValues(model_fit_mcmc)
+MF = Hmsc::evaluateModelFit(hM=model_fit_mcmc, predY=preds)
+hist(MF$TjurR2, xlim = c(0,1), main=paste0("Mean = ", round(mean(MF$TjurR2),2)))
+hist(MF$AUC, xlim = c(0,1), main=paste0("Mean = ", round(mean(MF$AUC),2)))
+AUC <- as.data.frame(MF$AUC) # auc/espèces
+species_name = colnames(biodivmed_occ_2)[!colnames(biodivmed_occ_2) %in% c("Row.names", "protection", "latitude_start_DD", "longitude_start_DD", "habitat_div", "mean_bathy", "logland", "chloroDay", "tempDay")]
+AUC$species_name <- species_name
+
+## Variance partionning
+head(model_fit_mcmc$X)
+VP = Hmsc::computeVariancePartitioning(model_fit_mcmc) #, group = c(1,2,2,1,3,3), groupnames = c("gravity","habitat", "environment"))
+Hmsc::plotVariancePartitioning(model_fit_mcmc, VP = VP, main = "Variance Partitioning", )
+
+
+# Variance partitioning ggplot
+VP_long <- as.data.frame(VP[["vals"]]) |>
+tibble::rownames_to_column(var = "Covariate") |>
+tidyr::pivot_longer(
+cols = - Covariate,
+names_to = "Response",
+values_to = "Value"
+)
+VP_long$Covariate <- forcats::fct_relevel(VP_long$Covariate, c(
+unique(VP_long$Covariate)[!grepl("Random", unique(VP_long$Covariate))],
+"Random: associations", "Random: spatial" ))
+
+
+library(ggplot2)
+ggplot(VP_long, aes(x = Response, y = Value, fill = Covariate)) +
+geom_bar(stat = "identity", position = "stack", color = "black", size = 0.2) +
+# scale_fill_manual(values = heat.colors(length(unique(VP_long$Covariate)), alpha = 1))+
+labs(
+title = "Variance partitioning",
+x = "",
+y = ""
+) +
+theme_minimal() +
+theme(
+axis.text.x = element_text(angle = 50, hjust = 1, vjust = 0.5),
+legend.position = "right",
+legend.text = element_text(size = 6)
+)
+
+
+
+
+## Parameters estimates
+# species response to covariates
+postBeta = Hmsc::getPostEstimate(model_fit_mcmc, parName = "Beta")
+Hmsc::plotBeta(model_fit_mcmc, post = postBeta, param = "Support", supportLevel = 0.95, split=.4, spNamesNumbers = c(F,F))
+
+# residual associations among species
+OmegaCor = Hmsc::computeAssociations(model_fit_mcmc)
+supportLevel = 0.95
+toPlot = ((OmegaCor[[1]]$support>supportLevel)
+          + (OmegaCor[[1]]$support<(1-supportLevel))>0)*OmegaCor[[1]]$mean
+corrplot::corrplot(toPlot, method = "color",
+                   col=colorRampPalette(c("blue","white","red"))(200),
+                   tl.cex=.6, tl.col="black",
+                   title=paste("random effect level:", model_fit_mcmc$rLNames[1]), mar=c(0,0,1,0))
+
+## Plotting variation over environmental gradients
+Gradient <- Hmsc::constructGradient(model_fit_mcmc,
+                                    focalVariable = "tempDay",
+                                    non.focalVariables = list("protection"=list(1,"reserve"),
+                                                              "habitat_div"=list(1),
+                                                              "mean_bathy"=list(1),
+                                                              "logland"=list(1),
+                                                              "chloroDay"=list(1)))
+
+
+Gradient$XDataNew
+#XFormula = ~ protection + habitat_div + mean_bathy + logland + chloroDay + tempDay,
+
+predY = predict(model_fit_mcmc, XData=Gradient$XDataNew, studyDesign=Gradient$studyDesignNew,
+                ranLevels=Gradient$rLNew, expected=FALSE)
+
+Hmsc::plotGradient(model_fit_mcmc, Gradient, pred=predY, measure="S", showData = TRUE)
+#measure="S" to plot the summed expected species richness, i.e. the row sum of the predicted communities.
+# predicted response peaks where ?
+
+# measure="Y" to visualize the same predictions for individual species and by using index to select the species to be visualized (as ordered in the matrix m$Y).
+Hmsc::plotGradient(model_fit_mcmc, Gradient, pred=predY, measure="Y", index = 15, showData = TRUE)
+
+
+
+```
+

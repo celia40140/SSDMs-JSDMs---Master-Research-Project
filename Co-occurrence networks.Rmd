@@ -1,0 +1,140 @@
+---
+title: "eDNA_Med"
+output:
+  pdf_document: default
+  html_document: default
+date: "2024-04-25"
+---
+
+## load Packages
+
+```{r warning=FALSE, include=FALSE}
+#packages for analysis
+library(asnipe)
+library(igraph)
+library(sna)
+#devtools::install_github("analyxcompany/ForceAtlas2")
+library(ForceAtlas2)
+```
+
+# Load data
+
+```{r}
+## open occurrences
+data_BIODIVMED_presence <- read.csv("data/raw_data/data_BIODIVMED_presence.csv", sep = ";" , header = TRUE)
+## load occurrences
+occ <- data_BIODIVMED_presence |>
+  dplyr::rename(id_spygen = code_spygen) |>  
+  dplyr::rename_all(~ stringr::str_replace_all(., "\\.", "_"))
+ 
+
+# Set row names to id_spygen column and remove the column
+rownames(occ) <- occ$id_spygen
+occ <- occ[, -1]  # Remove the id_spygen
+dim(occ)
+# load species name list
+load("C:/Users/celia/Desktop/Final Project/celia_project/data/raw_data/elasmo_names.RData")
+```
+
+# Create the network
+```{r}
+#adjacency matrix
+adj=asnipe::get_network(occ, association_index="SRI")
+```
+
+# Create the null model (randomized network)
+```{r}
+#run permutations
+perm <- asnipe::network_permutation(occ, data_format = "GBI", permutations = 1000, association_matrix= adj)
+
+MA<-apply(perm,2:3,function(x){quantile(x,c(0.975))})
+# differences between observed matrix and quantile of 1000 random networks
+## positive values are preferred associations
+
+PrefAsso = adj - MA
+PrefAsso[which(PrefAsso<0)]=0
+rowSums(PrefAsso)
+PrefAsso[which(PrefAsso>0)]=1
+sum(PrefAsso) # 352 = total count of positive associations
+
+# Calculate column sums excluding the first non-numeric column
+col_sums <- colSums(PrefAsso)
+# Identify columns with sum equal to 0
+cols_to_erase <- which(col_sums == 0)
+# Remove columns and rows 
+PrefAsso <- PrefAsso[-cols_to_erase, -cols_to_erase]
+
+```
+
+
+# Plot the observed network (all associations)
+```{r}
+assoc.g1=igraph::graph_from_adjacency_matrix(adj, "undirected", weighted=T) #create a graph object
+
+
+elasmo_names_in_graph <- intersect(rownames(adj), elasmo_names)
+
+# Assign labels to all nodes but only display the names of elasmobranch species
+igraph::V(assoc.g1)$label <- ifelse(igraph::V(assoc.g1)$name %in% elasmo_names_in_graph, igraph::V(assoc.g1)$name, "")
+
+# Plot the graph with labels of elasmobranch species
+com=igraph::cluster_fast_greedy(assoc.g1) #community detection method
+node.colors=igraph::membership(com) #assign node color based on community membership
+
+# degree (number of connected species)
+degree_binary <- degree(adj, gmode="graph",ignore.eval=TRUE)
+
+
+layout.net <- layout.forceatlas2(assoc.g1,directed=FALSE, iterations = 25000, plotstep = 5000, k=15000)
+set.seed(2)
+par(mar = c(0.2, 0.2, 0.2, 0.2))
+plot(assoc.g1, layout = layout.net, edge.width = igraph::E(assoc.g1)$weight * 2, 
+     vertex.label = igraph::V(assoc.g1)$label, vertex.size = degree_binary/30, vertex.color = node.colors, vertex.label.cex = 0.7)
+
+# layouts = c("igraph::layout_with_fr", "igraph::layout_with_mds", igraph::layout_with_kk", "igraph::layout_with_dh", "igraph::layout_with_gem", "igraph::layout_as_star", "igraph::layout_as_tree", "igraph::layout_in_circle", "igraph::layout_on_grid")
+```
+
+```{r}
+set.seed(2)
+par(mar = c(0.2, 0.2, 0.2, 0.2))
+plot(assoc.g1, layout = igraph::layout_with_mds, edge.width = igraph::E(assoc.g1)$weight * 1, 
+     vertex.label = igraph::V(assoc.g1)$label, vertex.size = degree_binary/20, vertex.color = node.colors, vertex.label.cex = 0.7)
+
+```
+
+
+# Plot the network with preferred associations
+```{r}
+assoc.g=igraph::graph_from_adjacency_matrix(PrefAsso, "undirected", weighted=T) #create a graph object
+
+
+elasmo_names_in_graph <- intersect(rownames(PrefAsso), elasmo_names)
+
+# Assign labels to all nodes but only display the names of elasmobranch species
+igraph::V(assoc.g)$label <- ifelse(igraph::V(assoc.g)$name %in% elasmo_names_in_graph, igraph::V(assoc.g)$name, "")
+
+# Plot the graph with labels of elasmobranch species
+com=igraph::cluster_fast_greedy(assoc.g) #community detection method
+node.colors=igraph::membership(com) #assign node color based on community membership
+
+# degree (number of connected species)
+degree_binary <- degree(PrefAsso, gmode="graph",ignore.eval=TRUE)
+
+# layouts = c("igraph::layout_with_fr", "igraph::layout_with_mds", igraph::layout_with_kk", "igraph::layout_with_dh", "igraph::layout_with_gem", "igraph::layout_as_star", "igraph::layout_as_tree", "igraph::layout_in_circle", "igraph::layout_on_grid")
+set.seed(2)
+par(mar = c(0.2, 0.2, 0.2, 0.2))
+plot(assoc.g, layout = igraph::layout_with_mds, edge.width = igraph::E(assoc.g)$weight * 2, 
+     vertex.label = igraph::V(assoc.g)$label, vertex.size = degree_binary/2, vertex.color = node.colors, vertex.label.cex = 0.7)
+
+```
+
+```{r}
+set.seed(2)
+par(mar = c(0.2, 0.2, 0.2, 0.2))
+plot(assoc.g, layout = igraph::layout_with_mds, edge.width = igraph::E(assoc.g)$weight * 2, 
+     vertex.label = igraph::V(assoc.g)$label, vertex.size = 5, vertex.color = node.colors, vertex.label.cex = 0.7)
+```
+     
+     
+     
+     
